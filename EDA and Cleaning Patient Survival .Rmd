@@ -1,0 +1,827 @@
+---
+title: "Final_ML"
+author: '2128830'
+date: '2022-03-17'
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+# library
+```{r}
+# Load the required libraries
+library(tidyverse)
+library(ggpubr)
+library(tree)
+library(corrplot)
+library(mice)
+library(flextable)
+library(dlookr)
+```
+
+# Read data
+```{r}
+#read the data in such a way that the strings in a data frame are treated as factor variables, and where there is a missing value replace it with NA
+
+patinet_data <- read.csv("dataset.csv",stringsAsFactors = TRUE, na.strings = c("",NA))
+```
+
+# Explore the Data Statsictically
+
+```{r}
+str(patinet_data)
+```
+
+We have 85 variables and 91713 observations.
+
+# Summary Statistics of variables
+
+```{r}
+summary(patinet_data)
+```
+We see that there are missing values (NAs) in some variables.
+
+# Finding the percentage of Missing Values
+```{r}
+#The Count of missing values in each variables
+patinet_data_NA_count <- apply(is.na(patinet_data), 2, sum)
+patinet_data_NA_count
+#The percentage of NA per variable
+patinet_data_NA_perc <- patinet_data_NA_count / dim(patinet_data)[1] * 100
+patinet_data_NA_perc
+```
+
+
+# Drops the columns with Na's more than 5%
+
+```{r}
+# Drops the columns with Na's more than 5%, Consider 5% as a threshold for removing the features which have more than 5% missing values.
+
+pat_data <- patinet_data[,!sapply(patinet_data, function(x) mean(is.na(x)))> 0.05]
+
+```
+
+# Explore the Data Statistically Again Using dlookr Library
+
+
+```{r}
+#checking whether the type of data is read correctly, missing values percentage and count and the unique count and rate for each variables.
+diagnose(pat_data)%>% flextable()
+```
+
+
+```{r}
+#checking the categorical variables with their levels and frequency of each level
+diagnose_category(pat_data)%>% flextable()
+```
+
+
+```{r}
+#checking the numerical variables
+diagnose_numeric(pat_data)%>% flextable()
+```
+From the numerical diagnoses it is clear that the variable"gcs_eyes_apache", "gcs_motor_apache" ,"gcs_verbal_apache" should be read as a factor, because they are categorical. Moreover, pre_icu_los_days should not contains negative values(we will impute this later in outlier section.)
+
+```{r}
+#The variables "gcs_eyes_apache","gcs_motor_apache","gcs_verbal_apache" should be read as a factor, because they are categorical.
+pat_data$ gcs_eyes_apache = as.factor(pat_data$gcs_eyes_apache)
+pat_data$ gcs_motor_apache = as.factor(pat_data$gcs_motor_apache)
+pat_data$gcs_verbal_apache = as.factor(pat_data$gcs_verbal_apache)
+```
+
+
+
+#Imputation of Missing values
+
+
+```{r}
+#Define Mode Function
+Mode <- function(x){
+  ux<- unique(x)
+  ux[which.max(tabulate(match(x,ux)))]
+  }
+```
+
+
+```{r}
+# replacing the missing values in categorical variables with Mode.
+pat_data %>% mutate_if(is.factor,funs(replace(.,is.na(.), Mode(na.omit(.)))))-> pat_data
+```
+
+
+```{r}
+# replacing the missing values in numerical variables which are not binary(i.e. their unique length is larger 3 since we have blank, zero and one, therefore the unique length is 3) with the median.
+
+data.frame(lapply(pat_data,function(x) {
+    if(is.numeric(x) && length(unique(x))>3)ifelse(is.na(x),median(x,na.rm=T),x) else x}))-> pat_data
+```
+
+
+The following are the variables that are binary and contain missing values. The strategy for cleaning the binary values is using the mice library and using the logreg as a method (logistic regression algorithm) for replacing the missing values. 
+
+```{r}
+# Using diagnose and filter to refine binary variables having missing count. 
+pat_data %>%
+diagnose() %>%
+filter(unique_count<=3 & missing_count>0)
+```
+
+
+```{r}
+# Using logistic regression in mice to impute binary variables 
+my_imp_1 =mice(pat_data, m=5, method = "logreg",maxit = 5)
+```
+
+
+```{r}
+# Completing the dataset and checking for NA values
+pat_data = complete(my_imp_1,5)
+summary(pat_data)
+colSums(is.na(pat_data))
+```
+
+Now, we have removed all the missing values and since it takes time tO built this data we save the data.
+
+```{r}
+# Saving data
+save(pat_data,file="pat_data_noNA.Rda")
+write.csv(pat_data, "pat_data_noNA.csv")
+```
+
+# Removing duplicate instances
+
+```{r}
+# Remove duplicate rows
+pat_data<- unique(pat_data)
+```
+
+
+The following are our binary variables, and we need to to change the type of those which are numeric to a factor.
+
+```{r}
+pat_data %>%
+diagnose() %>%
+filter(unique_count<= 2)
+```
+
+```{r}
+#changing the type of binary variables from numeric to a factor.
+pat_data$elective_surgery <- as.factor(pat_data$elective_surgery)
+pat_data$ apache_post_operative = as.factor(pat_data$apache_post_operative)
+pat_data$ arf_apache = as.factor(pat_data$arf_apache)
+pat_data$ gcs_unable_apache = as.factor(pat_data$gcs_unable_apache)
+pat_data$intubated_apache = as.factor(pat_data$intubated_apache)
+pat_data$ventilated_apache = as.factor(pat_data$ventilated_apache)
+pat_data$aids = as.factor(pat_data$aids)
+pat_data$ cirrhosis = as.factor(pat_data$cirrhosis)
+pat_data$diabetes_mellitus = as.factor(pat_data$diabetes_mellitus)
+pat_data$ hepatic_failure = as.factor(pat_data$hepatic_failure)
+pat_data$ immunosuppression = as.factor(pat_data$immunosuppression)
+pat_data$leukemia = as.factor(pat_data$leukemia)
+pat_data$lymphoma = as.factor(pat_data$lymphoma)
+pat_data$solid_tumor_with_metastasis = as.factor(pat_data$solid_tumor_with_metastasis)
+```
+
+#Outliers 
+
+```{r}
+# Identifying the outliers 
+diagnose_outlier(pat_data)%>% flextable() 
+```
+In the following, we plot all the numeric variables with outlier and without outliers in the form of a boxplot and histogram. In order to see how our data looks before and after removing the outlier and what is the distribution of the data.
+
+```{r}
+# Plotting outliers from all variables
+plot_outlier(pat_data)
+```
+
+The following are 
+```{r}
+# Finding variables which have outliers
+pat_data %>%
+diagnose_numeric() %>%
+filter(outlier>0)
+
+```
+
+We do not include the pre_icu_los_days and hospital-death in the following sets, since the hospital_death is our target variable and pre-icu_los_days is having 15,815 outliers, so we will be able to deal with them separately.
+
+```{r}
+# Creating outliers vector to be able to use it as filter.
+outliers <- c("age", "bmi", "height","weight","apache_3j_diagnosis","heart_rate_apache","temp_apache","d1_diasbp_max","d1_diasbp_min","d1_diasbp_noninvasive_max", "d1_diasbp_noninvasive_min","d1_heartrate_max","d1_heartrate_min","d1_mbp_max","d1_mbp_min","d1_mbp_noninvasive_max","d1_mbp_noninvasive_min","d1_resprate_max","d1_resprate_min","d1_spo2_max", "d1_spo2_min","d1_sysbp_max","d1_sysbp_min","d1_sysbp_noninvasive_max","d1_sysbp_noninvasive_min","d1_temp_max","d1_temp_min","h1_diasbp_max","h1_diasbp_min", "h1_heartrate_max", "h1_heartrate_min", "h1_resprate_max","h1_resprate_min", "h1_spo2_max", "h1_spo2_min","h1_sysbp_max","h1_sysbp_min")
+
+```
+
+
+```{r}
+out_pat_data<-pat_data
+```
+
+# Removing Outliers using boxplot 
+```{r}
+
+out_pat_data_boxplot_age <- boxplot(out_pat_data$age)
+
+out_pat_data_boxplot_age$out
+
+out_pat_data$age[which(out_pat_data$age %in% out_pat_data_boxplot_age$out)]<-"NA"
+
+```
+
+```{r}
+summary(out_pat_data$age)
+str(out_pat_data$age)
+```
+
+
+```{r}
+
+out_pat_data_boxplot_bmi <- boxplot(out_pat_data$bmi)
+
+out_pat_data_boxplot_bmi$out
+
+out_pat_data$bmi[which(out_pat_data$bmi %in% out_pat_data_boxplot_bmi$out)]<-"NA"
+summary(out_pat_data$bmi)
+
+```
+
+
+
+
+```{r}
+out_pat_data_boxplot_height <- boxplot(out_pat_data$height)
+
+out_pat_data_boxplot_height$out
+
+out_pat_data$height[which(out_pat_data$height %in% out_pat_data_boxplot_height$out)]<-"NA"
+```
+
+
+```{r}
+out_pat_data_boxplot_pre_icu_los_days<- boxplot(out_pat_data$pre_icu_los_days)
+
+out_pat_data_boxplot_pre_icu_los_days$out
+
+out_pat_data$pre_icu_los_days[which(out_pat_data$pre_icu_los_days %in% out_pat_data_boxplot_pre_icu_los_days$out)]<-"NA"
+```
+
+
+```{r}
+
+out_pat_data_boxplot_weight<- boxplot(out_pat_data$weight)
+
+out_pat_data_boxplot_weight$out
+
+
+out_pat_data$weight[which(out_pat_data$weight %in% out_pat_data_boxplot_weight$out)]<-"NA"
+```
+
+
+
+
+```{r}
+
+out_pat_data_boxplot_apache_3j_diagnosis<- boxplot(out_pat_data$apache_3j_diagnosis)
+
+out_pat_data_boxplot_apache_3j_diagnosis$out
+
+out_pat_data$apache_3j_diagnosis[which(out_pat_data$apache_3j_diagnosis %in% out_pat_data_boxplot_apache_3j_diagnosis$out)]<-"NA"
+```
+
+
+```{r}
+out_pat_data_boxplot_heart_rate_apache<- boxplot(out_pat_data$heart_rate_apache)
+
+out_pat_data_boxplot_heart_rate_apache$out
+
+out_pat_data$heart_rate_apache[which(out_pat_data$heart_rate_apache %in% out_pat_data_boxplot_heart_rate_apache$out)]<-"NA"
+```
+
+
+```{r}
+
+out_pat_data_boxplot_temp_apache<- boxplot(out_pat_data$temp_apache)
+
+out_pat_data_boxplot_temp_apache$out
+
+
+out_pat_data$temp_apache[which(out_pat_data$temp_apache %in% out_pat_data_boxplot_temp_apache$out)]<-"NA"
+```
+
+
+```{r}
+
+out_pat_data_boxplot_d1_diasbp_max<- boxplot(out_pat_data$d1_diasbp_max)
+
+out_pat_data_boxplot_d1_diasbp_max$out
+
+out_pat_data$d1_diasbp_max[which(out_pat_data$d1_diasbp_max %in% out_pat_data_boxplot_d1_diasbp_max$out)]<-"NA"
+```
+
+```{r}
+out_pat_data_boxplot_d1_diasbp_min<- boxplot(out_pat_data$d1_diasbp_min)
+
+out_pat_data_boxplot_d1_diasbp_min$out
+
+out_pat_data$d1_diasbp_min[which(out_pat_data$d1_diasbp_min %in% out_pat_data_boxplot_d1_diasbp_min$out)]<-"NA"
+```
+
+
+
+```{r}
+
+out_pat_data_boxplot_d1_diasbp_noninvasive_max<- boxplot(out_pat_data$d1_diasbp_noninvasive_max)
+
+out_pat_data_boxplot_d1_diasbp_noninvasive_max$out
+
+out_pat_data$d1_diasbp_noninvasive_max[which(out_pat_data$d1_diasbp_noninvasive_max %in% out_pat_data_boxplot_d1_diasbp_noninvasive_max$out)]<-"NA"
+```
+
+```{r}
+
+out_pat_data_boxplot_d1_diasbp_noninvasive_min<- boxplot(out_pat_data$d1_diasbp_noninvasive_min)
+
+out_pat_data_boxplot_d1_diasbp_noninvasive_min$out
+
+out_pat_data$d1_diasbp_noninvasive_min[which(out_pat_data$d1_diasbp_noninvasive_min %in% out_pat_data_boxplot_d1_diasbp_noninvasive_min$out)]<-"NA"
+```
+
+```{r}
+out_pat_data_boxplot_d1_heartrate_max<- boxplot(out_pat_data$d1_heartrate_max)
+
+out_pat_data_boxplot_d1_heartrate_max$out
+
+out_pat_data$d1_heartrate_max[which(out_pat_data$d1_heartrate_max %in% out_pat_data_boxplot_d1_heartrate_max$out)]<-"NA"
+```
+
+
+```{r}
+
+out_pat_data_boxplot_d1_heartrate_min<- boxplot(out_pat_data$d1_heartrate_min)
+
+out_pat_data_boxplot_d1_heartrate_min$out
+
+out_pat_data$d1_heartrate_min[which(out_pat_data$d1_heartrate_min %in% out_pat_data_boxplot_d1_heartrate_min$out)]<-"NA"
+```
+
+```{r}
+out_pat_data_boxplot_d1_mbp_max<- boxplot(out_pat_data$d1_mbp_max)
+
+out_pat_data_boxplot_d1_mbp_max$out
+
+out_pat_data$d1_mbp_max[which(out_pat_data$d1_mbp_max %in% out_pat_data_boxplot_d1_mbp_max$out)]<-"NA"
+```
+
+```{r}
+out_pat_data_boxplot_d1_mbp_min<- boxplot(out_pat_data$d1_mbp_min)
+
+out_pat_data_boxplot_d1_mbp_min$out
+
+out_pat_data$d1_mbp_min[which(out_pat_data$d1_mbp_min %in% out_pat_data_boxplot_d1_mbp_min$out)]<-"NA"
+```
+
+
+```{r}
+
+out_pat_data_boxplot_d1_mbp_noninvasive_max<- boxplot(out_pat_data$d1_mbp_noninvasive_max)
+
+out_pat_data_boxplot_d1_mbp_noninvasive_max$out
+
+out_pat_data$d1_mbp_noninvasive_max[which(out_pat_data$d1_mbp_noninvasive_max %in% out_pat_data_boxplot_d1_mbp_noninvasive_max$out)]<-"NA"
+```
+
+```{r}
+
+out_pat_data_boxplot_d1_mbp_noninvasive_min<- boxplot(out_pat_data$d1_mbp_noninvasive_min)
+
+out_pat_data_boxplot_d1_mbp_noninvasive_min$out
+
+out_pat_data$d1_mbp_noninvasive_min[which(out_pat_data$d1_mbp_noninvasive_min %in% out_pat_data_boxplot_d1_mbp_noninvasive_min$out)]<-"NA"
+```
+
+
+```{r}
+
+out_pat_data_boxplot_d1_resprate_max<- boxplot(out_pat_data$d1_resprate_max)
+out_pat_data_boxplot_d1_resprate_max$out
+
+out_pat_data$d1_resprate_max[which(out_pat_data$d1_resprate_max %in% out_pat_data_boxplot_d1_resprate_max$out)]<-"NA"
+```
+
+```{r}
+
+out_pat_data_boxplot_d1_resprate_min<- boxplot(out_pat_data$d1_resprate_min)
+
+out_pat_data_boxplot_d1_resprate_min$out
+
+out_pat_data$d1_resprate_min[which(out_pat_data$d1_resprate_min %in% out_pat_data_boxplot_d1_resprate_min$out)]<-"NA"
+
+```
+
+
+
+
+
+
+```{r}
+out_pat_data_boxplot_d1_spo2_max<-boxplot(out_pat_data$d1_spo2_max)
+
+out_pat_data_boxplot_d1_spo2_max$out
+out_pat_data$d1_spo2_max[which(out_pat_data$d1_spo2_max %in% out_pat_data_boxplot_d1_spo2_max$out)]<-"NA"
+```
+
+```{r}
+out_pat_data_boxplot_d1_spo2_min<-boxplot(out_pat_data$d1_spo2_min)
+
+out_pat_data_boxplot_d1_spo2_min$out
+out_pat_data$d1_spo2_min[which(out_pat_data$d1_spo2_min %in% out_pat_data_boxplot_d1_spo2_min$out)]<-"NA"
+```
+
+```{r}
+out_pat_data_boxplot_d1_sysbp_max<-boxplot(out_pat_data$d1_sysbp_max)
+
+out_pat_data_boxplot_d1_sysbp_max$out
+out_pat_data$d1_sysbp_max[which(out_pat_data$d1_sysbp_max %in% out_pat_data_boxplot_d1_sysbp_max$out)]<-"NA"
+```
+
+```{r}
+out_pat_data_boxplot_d1_sysbp_min<-boxplot(out_pat_data$d1_sysbp_min)
+
+out_pat_data_boxplot_d1_sysbp_min$out
+out_pat_data$d1_sysbp_max[which(out_pat_data$d1_sysbp_min %in% out_pat_data_boxplot_d1_sysbp_min$out)]<-"NA"
+```
+
+```{r}
+out_pat_data_boxplot_d1_sysbp_noninvasive_max<-boxplot(out_pat_data$d1_sysbp_noninvasive_max)
+
+out_pat_data_boxplot_d1_sysbp_noninvasive_max$out
+out_pat_data$d1_sysbp_noninvasive_max[which(out_pat_data$d1_sysbp_noninvasive_max %in% out_pat_data_boxplot_d1_sysbp_noninvasive_max$out)]<-"NA"
+```
+
+	
+
+
+```{r}
+out_pat_data_boxplot_d1_sysbp_noninvasive_min<-boxplot(out_pat_data$d1_sysbp_noninvasive_min)
+
+out_pat_data_boxplot_d1_sysbp_noninvasive_min$out
+out_pat_data$d1_sysbp_noninvasive_min[which(out_pat_data$d1_sysbp_noninvasive_min %in% out_pat_data_boxplot_d1_sysbp_noninvasive_min$out)]<-"NA"
+```
+
+
+
+```{r}
+out_pat_data_boxplot_d1_temp_max<-boxplot(out_pat_data$d1_temp_max)
+
+out_pat_data_boxplot_d1_temp_max$out
+out_pat_data$d1_temp_max[which(out_pat_data$d1_temp_max %in% out_pat_data_boxplot_d1_temp_max$out)]<-"NA"
+```
+
+	
+
+```{r}
+out_pat_data_boxplot_d1_temp_min	<-boxplot(out_pat_data$d1_temp_min	)
+
+out_pat_data_boxplot_d1_temp_min	$out
+out_pat_data$d1_temp_min	[which(out_pat_data$d1_temp_min	 %in% out_pat_data_boxplot_d1_temp_min	$out)]<-"NA"
+```
+
+
+```{r}
+out_pat_data_boxplot_h1_diasbp_max	<-boxplot(out_pat_data$h1_diasbp_max	)
+
+out_pat_data_boxplot_h1_diasbp_max	$out
+out_pat_data$h1_diasbp_max	[which(out_pat_data$h1_diasbp_max	 %in% out_pat_data_boxplot_h1_diasbp_max	$out)]<-"NA"
+
+```
+
+
+	
+
+```{r}
+out_pat_data_boxplot_h1_diasbp_min	<-boxplot(out_pat_data$h1_diasbp_min	)
+
+out_pat_data_boxplot_h1_diasbp_min	$out
+out_pat_data$h1_diasbp_min	[which(out_pat_data$h1_diasbp_min	 %in% out_pat_data_boxplot_h1_diasbp_min	$out)]<-"NA"
+```
+
+
+
+		
+	
+
+
+```{r}
+out_pat_data_boxplot_h1_heartrate_max	<-boxplot(out_pat_data$h1_heartrate_max	)
+
+out_pat_data_boxplot_h1_heartrate_max	$out
+out_pat_data$h1_heartrate_max	[which(out_pat_data$h1_heartrate_max	 %in% out_pat_data_boxplot_h1_heartrate_max	$out)]<-"NA"
+```
+
+
+
+
+```{r}
+out_pat_data_boxplot_h1_heartrate_min	<-boxplot(out_pat_data$h1_heartrate_min	)
+
+out_pat_data_boxplot_h1_heartrate_min$out
+out_pat_data$h1_heartrate_min	[which(out_pat_data$h1_heartrate_min %in% out_pat_data_boxplot_h1_heartrate_min	$out)]<-"NA"
+```
+
+
+	
+
+
+```{r}
+out_pat_data_boxplot_h1_resprate_max	<-boxplot(out_pat_data$h1_resprate_max	)
+
+out_pat_data_boxplot_h1_resprate_max$out
+out_pat_data$h1_resprate_max[which(out_pat_data$h1_resprate_max %in% out_pat_data_boxplot_h1_resprate_max	$out)]<-"NA"
+```
+
+
+
+
+
+```{r}
+out_pat_data_boxplot_h1_resprate_min	<-boxplot(out_pat_data$h1_resprate_min)
+
+out_pat_data_boxplot_h1_resprate_min$out
+out_pat_data$h1_resprate_min[which(out_pat_data$h1_resprate_min %in% out_pat_data_boxplot_h1_resprate_min	$out)]<-"NA"
+```
+
+
+```{r}
+out_pat_data_boxplot_h1_spo2_max		<-boxplot(out_pat_data$h1_spo2_max)
+
+out_pat_data_boxplot_h1_spo2_max	$out
+out_pat_data$h1_spo2_max	[which(out_pat_data$h1_spo2_max	 %in% out_pat_data_boxplot_h1_spo2_max$out)]<-"NA"
+```
+
+
+```{r}
+out_pat_data_boxplot_h1_spo2_min<-boxplot(out_pat_data$h1_spo2_min)
+
+out_pat_data_boxplot_h1_spo2_min$out
+out_pat_data$h1_spo2_min[which(out_pat_data$h1_spo2_min	 %in% out_pat_data_boxplot_h1_spo2_min$out)]<-"NA"
+```
+
+
+h1_sysbp_max		
+h1_sysbp_min
+
+```{r}
+out_pat_data_boxplot_h1_sysbp_max<-boxplot(out_pat_data$h1_sysbp_max)
+
+out_pat_data_boxplot_h1_sysbp_max$out
+out_pat_data$h1_sysbp_max[which(out_pat_data$h1_sysbp_max	 %in% out_pat_data_boxplot_h1_sysbp_max$out)]<-"NA"
+```
+
+
+
+
+```{r}
+out_pat_data_boxplot_h1_sysbp_min<-boxplot(out_pat_data$h1_sysbp_min)
+
+out_pat_data_boxplot_h1_sysbp_min$out
+out_pat_data$h1_sysbp_min[which(out_pat_data$h1_sysbp_min	 %in% out_pat_data_boxplot_h1_sysbp_min$out)]<-"NA"
+```
+
+```{r}
+out_pat_data[,outliers] <- lapply(out_pat_data[,outhiers], function(x) as.numeric(as.character(x)))
+```
+
+
+
+```{r}
+diagnose(out_pat_data)%>% flextable()
+```
+
+```{r}
+out_pat_data$pre_icu_los_days <- as.numeric(out_pat_data$pre_icu_los_days)
+```
+
+
+```{r}
+#imputing the na's with median as we have only numeric values as na's.
+data.frame(lapply(out_pat_data,function(x) {
+    if(is.numeric(x))ifelse(is.na(x),median(x,na.rm=T),x) else x}))-> out_pat_data
+```
+
+
+```{r}
+colSums(is.na(out_pat_data))
+```
+
+Since it takes time to built this data, we save it again.
+
+```{r}
+#replacing the negative values with median.
+out_pat_data$pre_icu_los_days[out_pat_data$pre_icu_los_days<0]<-median(out_pat_data$pre_icu_los_days)
+```
+
+
+Since it takes time to built this data, we save it again.
+```{r}
+save(out_pat_data,file="out_pat_data.Rda")
+write.csv(out_pat_data, "out_pat_data.csv")
+```
+
+
+During the imputation of outliers, the type of some of factors changed. We need to convert them again to factors.
+
+
+```{r}
+# Changing the type of binary variables from numeric to a factor.
+out_pat_data$elective_surgery <- as.factor(out_pat_data$elective_surgery)
+out_pat_data$ apache_post_operative = as.factor(out_pat_data$apache_post_operative)
+out_pat_data$ arf_apache = as.factor(out_pat_data$arf_apache)
+out_pat_data$ gcs_unable_apache = as.factor(out_pat_data$gcs_unable_apache)
+out_pat_data$intubated_apache = as.factor(out_pat_data$intubated_apache)
+out_pat_data$ventilated_apache = as.factor(out_pat_data$ventilated_apache)
+out_pat_data$aids = as.factor(out_pat_data$aids)
+out_pat_data$ cirrhosis = as.factor(out_pat_data$cirrhosis)
+out_pat_data$diabetes_mellitus = as.factor(out_pat_data$diabetes_mellitus)
+out_pat_data$ hepatic_failure = as.factor(out_pat_data$hepatic_failure)
+out_pat_data$ immunosuppression = as.factor(out_pat_data$immunosuppression)
+out_pat_data$leukemia = as.factor(out_pat_data$leukemia)
+out_pat_data$lymphoma = as.factor(out_pat_data$lymphoma)
+out_pat_data$solid_tumor_with_metastasis = as.factor(out_pat_data$solid_tumor_with_metastasis)
+```
+
+
+#Checking the Normality of Variables
+
+```{r}
+diagnose(out_pat_data)%>% flextable()
+```
+
+```{r}
+out_pat_data %>%
+diagnose() %>%
+filter(types == "numeric")
+```
+
+
+```{r}
+out_pat_data %>%
+diagnose() %>%
+filter(types == "integer")
+```
+We choose those variables which are numeric and integer(excluding the ID types) to check the normality.
+
+```{r}
+numeric <- c("age", "bmi", "height","pre_icu_los_days","weight","apache_3j_diagnosis","heart_rate_apache","temp_apache","d1_diasbp_max","d1_diasbp_min","d1_diasbp_noninvasive_max", "d1_diasbp_noninvasive_min","d1_heartrate_max","d1_heartrate_min","d1_mbp_max","d1_mbp_min","d1_mbp_noninvasive_max","d1_mbp_noninvasive_min","d1_resprate_max","d1_resprate_min","d1_spo2_max", "d1_spo2_min","d1_sysbp_max","d1_sysbp_min","d1_sysbp_noninvasive_max","d1_sysbp_noninvasive_min","d1_temp_max","d1_temp_min","h1_diasbp_max","h1_diasbp_min", "h1_heartrate_max", "h1_heartrate_min", "h1_resprate_max","h1_resprate_min", "h1_spo2_max", "h1_spo2_min","h1_sysbp_max","h1_sysbp_min","apache_2_diagnosis","map_apache", "hospital_death")
+
+```
+
+
+```{r}
+# Normality statistics of Numeric 
+normality(out_pat_data[numeric]) %>% flextable()
+```
+
+```{r}
+# Checking the normality of numerical variables by plotting qq-plot and histogram.
+out_pat_data[numeric] %>%
+  plot_normality(all_of(numeric))
+```
+
+# Correlation 
+
+```{r}
+# Correlation matrix
+cor.mat <- cor(out_pat_data[numeric])
+cor.mat
+```
+
+
+```{r}
+# Plotting the correlation matrix
+corrplot(cor.mat)
+```
+
+
+```{r}
+#Printing Highly Correlated variables
+highlyCorrelated <- findCorrelation(cor.mat, cutoff=0.75)# find attributes that are highly corrected (ideally >0.75)
+# print indexes of highly correlated attributes
+print(highlyCorrelated)
+```
+
+
+```{r}
+# Checking the correlation coefficient
+correlate(out_pat_data[numeric])# checking the correlation coefficient
+```
+
+
+```{r}
+#Finding numeric variables which have more 0.75 coefficient
+out_pat_data[numeric] %>%
+correlate() %>%
+filter(coef_corr >= 0.75)
+```
+
+
+
+```{r}
+out_pat_data[numeric] %>%
+correlate() %>%
+filter(coef_corr <= -0.75)
+```
+
+#Principal Component Analysis
+
+Since bmi is defined based on height and weight and they are highly correlated, we only keep bmi in the following vector. Moreover, the ID types are not needed in our analysis, we do not include them in the following vector.
+
+```{r}
+Mynumeric <- c('age','bmi','pre_icu_los_days','apache_2_diagnosis',
+ 'apache_3j_diagnosis','gcs_eyes_apache','gcs_motor_apache','gcs_verbal_apache','heart_rate_apache',
+'map_apache','resprate_apache','temp_apache','d1_diasbp_max',
+ 'd1_diasbp_min','d1_diasbp_noninvasive_max', 'd1_diasbp_noninvasive_min','d1_heartrate_max',
+ 'd1_heartrate_min','d1_mbp_max','d1_mbp_min','d1_mbp_noninvasive_max','d1_mbp_noninvasive_min',
+'d1_resprate_max','d1_resprate_min','d1_spo2_max', 'd1_spo2_min','d1_sysbp_max','d1_sysbp_min',
+ 'd1_sysbp_noninvasive_max','d1_sysbp_noninvasive_min','d1_temp_max','d1_temp_min','h1_diasbp_max',
+ 'h1_diasbp_min', 'h1_heartrate_max', 'h1_heartrate_min', 'h1_resprate_max','h1_resprate_min', 
+'h1_spo2_max', 'h1_spo2_min','h1_sysbp_max','h1_sysbp_min')
+```
+
+
+```{r}
+diagnose(out_pat_data[Mynumeric])%>% flextable()
+```
+
+
+```{r}
+out_pat_data$gcs_eyes_apache = as.numeric(out_pat_data$gcs_eyes_apache)
+out_pat_data$gcs_motor_apache = as.numeric(out_pat_data$gcs_motor_apache)
+out_pat_data$gcs_verbal_apache = as.numeric(out_pat_data$gcs_verbal_apache)
+
+```
+
+
+```{r}
+# Applying PCA 
+pc_Mynumeric <- prcomp((out_pat_data[Mynumeric]), center = T, scale. = T)
+```
+
+```{r}
+# inspect the attributes of the PCA object returned by prcomp
+attributes(pc_Mynumeric)
+```
+
+# calculate the proportion of exaplained variance (PEV) from the std values
+
+```{r}
+pc_Mynumeric_var <- pc_Mynumeric$sdev^2
+pc_Mynumeric_var
+```
+
+```{r}
+pc_Mynumeric_PEV <- pc_Mynumeric_var / sum(pc_Mynumeric_var)
+pc_Mynumeric_PEV
+```
+
+
+```{r}
+plot(pc_Mynumeric)
+```
+
+
+# plot the cumulative value of PEV for increasing number of additional PCs
+# add an 80% threshold line to inform the feature extraction
+
+```{r}
+opar <- par(no.readonly = TRUE)
+plot(
+  cumsum(pc_Mynumeric_PEV),
+  ylim = c(0,1),
+  xlab = 'PC',
+  ylab = 'cumulative PEV',
+  pch = 20,
+  col = 'orange'
+)
+abline(h = 0.8, col = 'red', lty = 'dashed')
+par(opar)
+```
+
+
+# according to the plot the first 15 PCs should be selected
+
+```{r}
+# get and inspect the loadings for each PC and  loadings are reported as a rotation matrix
+pc_Mynumeric_loadings <- pc_Mynumeric$rotation
+pc_Mynumeric_loadings
+```
+
+#get and inspect the loadings of first 15 pc's
+```{r}
+pc_Mynumeric_loadings_select <- pc_Mynumeric_loadings[,c(1:15)]
+pc_Mynumeric_loadings_select
+```
+
+
